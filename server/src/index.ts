@@ -11,6 +11,9 @@ import {
   GOOGLE_CLIENT_SECRET,
   COOKIE_NAME,
   UI_ROOT_URI,
+  GOOGLE_AUTH_URI,
+  GOOGLE_TOKEN_URI,
+  GOOGLE_USERINFO_BASE_URI,
 } from "./config";
 
 const port = 4000;
@@ -31,17 +34,14 @@ app.use(cookieParser());
 const redirectURI = "auth/google";
 
 function getGoogleAuthURL() {
-  const rootUrl = "https://accounts.google.com/o/oauth2/v2/auth";
+  const rootUrl = GOOGLE_AUTH_URI;
   const options = {
     redirect_uri: `${SERVER_ROOT_URI}/${redirectURI}`,
     client_id: GOOGLE_CLIENT_ID,
     access_type: "offline",
     response_type: "code",
     prompt: "consent",
-    scope: [
-      "https://www.googleapis.com/auth/userinfo.profile",
-      "https://www.googleapis.com/auth/userinfo.email",
-    ].join(" "),
+    scope: ["https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"].join(" "),
   };
 
   return `${rootUrl}?${querystring.stringify(options)}`;
@@ -49,20 +49,11 @@ function getGoogleAuthURL() {
 
 // Getting login URL
 app.get("/auth/google/url", (req, res) => {
+  console.log("called", "/auth/google/url");
   return res.send(getGoogleAuthURL());
 });
 
-function getTokens({
-  code,
-  clientId,
-  clientSecret,
-  redirectUri,
-}: {
-  code: string;
-  clientId: string;
-  clientSecret: string;
-  redirectUri: string;
-}): Promise<{
+async function getTokens({ code, clientId, clientSecret, redirectUri }: { code: string; clientId: string; clientSecret: string; redirectUri: string }): Promise<{
   access_token: string;
   expires_in: Number;
   refresh_token: string;
@@ -73,7 +64,6 @@ function getTokens({
    * Uses the code to get tokens
    * that can be used to fetch the user's profile
    */
-  const url = "https://oauth2.googleapis.com/token";
   const values = {
     code,
     client_id: clientId,
@@ -82,21 +72,22 @@ function getTokens({
     grant_type: "authorization_code",
   };
 
-  return axios
-    .post(url, querystring.stringify(values), {
+  try {
+    const res = await axios.post(GOOGLE_TOKEN_URI, querystring.stringify(values), {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
-    })
-    .then((res) => res.data)
-    .catch((error) => {
-      console.error(`Failed to fetch auth tokens`);
-      throw new Error(error.message);
     });
+    return res.data;
+  } catch (error: any) {
+    console.error(`Failed to fetch auth tokens`);
+    throw new Error(error.message);
+  }
 }
 
 // Getting the user from Google with the code
 app.get(`/${redirectURI}`, async (req, res) => {
+  console.log("called", redirectURI);
   const code = req.query.code as string;
 
   const { id_token, access_token } = await getTokens({
@@ -108,19 +99,18 @@ app.get(`/${redirectURI}`, async (req, res) => {
 
   // Fetch the user's profile with the access token and bearer
   const googleUser = await axios
-    .get(
-      `https://www.googleapis.com/oauth2/v1/userinfo?alt=json&access_token=${access_token}`,
-      {
-        headers: {
-          Authorization: `Bearer ${id_token}`,
-        },
-      }
-    )
+    .get(`${GOOGLE_USERINFO_BASE_URI}?alt=json&access_token=${access_token}`, {
+      headers: {
+        Authorization: `Bearer ${id_token}`,
+      },
+    })
     .then((res) => res.data)
     .catch((error) => {
       console.error(`Failed to fetch user`);
       throw new Error(error.message);
     });
+
+  console.log("googleUser", googleUser);
 
   const token = jwt.sign(googleUser, JWT_SECRET);
 
@@ -135,7 +125,7 @@ app.get(`/${redirectURI}`, async (req, res) => {
 
 // Getting the current user
 app.get("/auth/me", (req, res) => {
-  console.log("get me");
+  console.log("called", "get me");
   try {
     const decoded = jwt.verify(req.cookies[COOKIE_NAME], JWT_SECRET);
     console.log("decoded", decoded);
